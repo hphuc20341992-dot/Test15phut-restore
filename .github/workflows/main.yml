@@ -1,0 +1,64 @@
+name: VPS-With-Data-Sync
+on: 
+  workflow_dispatch:
+
+jobs:
+  vps-session:
+    runs-on: windows-latest
+    timeout-minutes: 25 # Tăng nhẹ lên 25p để đủ thời gian setup và upload artifact
+
+    steps:
+      - name: 1. Khởi tạo môi trường
+        shell: powershell
+        run: |
+          Write-Host "Dang chuan bi he thong..."
+          choco install tailscale -y --no-progress
+          Start-Service tailscale -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "C:\Backup"
+
+      - name: 2. Tải dữ liệu từ phiên trước (Artifact)
+        uses: actions/download-artifact@v4
+        with:
+          name: vps-data-sync
+          path: C:\Backup
+        continue-on-error: true
+
+      - name: 3. Kết nối Tailscale & RDP
+        shell: powershell
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $TS_EXE = "C:\Program Files\Tailscale\tailscale.exe"
+          & $TS_EXE up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=GitHub-VPS-CoDinh --accept-routes --reset
+          net user runneradmin "Phuc1993"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: 4. Duy trì máy (15 Phút)
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          $waitMinutes = 15 # Đã chỉnh xuống 15 phút
+          Write-Host "Luu y: Moi du lieu quan trong hay de vao thu muc C:\Backup"
+          
+          for ($i=1; $i -le $waitMinutes; $i++) {
+              Start-Sleep -Seconds 60
+              Write-Host "Uptime: $i/$waitMinutes phut. Dang treo..."
+          }
+
+          # Kích hoạt máy ảo mới (Session gối đầu)
+          Write-Host "Dang kich hoat phien moi..."
+          gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
+
+      - name: 5. Sao lưu dữ liệu lên GitHub (Artifact)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vps-data-sync
+          path: C:\Backup
+          retention-days: 1
+
+      - name: 6. Chờ bàn giao cuối
+        shell: powershell
+        run: Start-Sleep -Seconds 60 # Giảm thời gian chờ cuối xuống 1 phút
