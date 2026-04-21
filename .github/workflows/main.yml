@@ -1,64 +1,60 @@
-name: VPS-With-Data-Sync
-on: 
+name: VPS-15Phut-Lien-Tuc
+on:
   workflow_dispatch:
+  # Lưu ý: Cron của GitHub chỉ chạy tối thiểu mỗi 5-15 phút nhưng không chính xác tuyệt đối
+  schedule:
+    - cron: '*/15 * * * *' 
 
 jobs:
-  vps-session:
+  vps-run:
     runs-on: windows-latest
-    timeout-minutes: 25 # Tăng nhẹ lên 25p để đủ thời gian setup và upload artifact
+    timeout-minutes: 25 # Tăng thêm 10 phút để trừ hao thời gian setup/backup
 
     steps:
-      - name: 1. Khởi tạo môi trường
+      - name: 1. Setup & Restore
         shell: powershell
         run: |
-          Write-Host "Dang chuan bi he thong..."
           choco install tailscale -y --no-progress
-          Start-Service tailscale -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path "C:\Backup"
+          Start-Service tailscale
+          if (!(Test-Path "C:\Backup")) { New-Item -ItemType Directory -Path "C:\Backup" }
 
-      - name: 2. Tải dữ liệu từ phiên trước (Artifact)
+      - name: 2. Download Last State
         uses: actions/download-artifact@v4
         with:
-          name: vps-data-sync
+          name: vps-data-15m
           path: C:\Backup
         continue-on-error: true
 
-      - name: 3. Kết nối Tailscale & RDP
+      - name: 3. Start Tailscale (Fixed IP)
         shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $TS_EXE = "C:\Program Files\Tailscale\tailscale.exe"
-          & $TS_EXE up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=GitHub-VPS-CoDinh --accept-routes --reset
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset
           net user runneradmin "Phuc1993"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: 4. Duy trì máy (15 Phút)
+      - name: 4. Chạy nối đầu (Phút thứ 15)
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          $waitMinutes = 15 # Đã chỉnh xuống 15 phút
-          Write-Host "Luu y: Moi du lieu quan trong hay de vao thu muc C:\Backup"
-          
-          for ($i=1; $i -le $waitMinutes; $i++) {
+          $wait = 15
+          for ($i=1; $i -le $wait; $i++) {
               Start-Sleep -Seconds 60
-              Write-Host "Uptime: $i/$waitMinutes phut. Dang treo..."
+              Write-Host "Uptime: $i/$wait phut..."
+              # Kích hoạt máy mới ở phút thứ 13 để đảm bảo máy mới sẵn sàng khi máy cũ tắt
+              if ($i -eq 13) { 
+                  Write-Host "Dang kich hoat phien moi..."
+                  gh workflow run "vps-15phut.yml" --repo "$env:GITHUB_REPOSITORY"
+              }
           }
 
-          # Kích hoạt máy ảo mới (Session gối đầu)
-          Write-Host "Dang kich hoat phien moi..."
-          gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
-
-      - name: 5. Sao lưu dữ liệu lên GitHub (Artifact)
+      - name: 5. Save State
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vps-data-sync
+          name: vps-data-15m
           path: C:\Backup
           retention-days: 1
-
-      - name: 6. Chờ bàn giao cuối
-        shell: powershell
-        run: Start-Sleep -Seconds 60 # Giảm thời gian chờ cuối xuống 1 phút
