@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '*/15 * * * *'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   vps-run:
     runs-on: windows-latest
@@ -13,7 +16,6 @@ jobs:
       - name: 1. Setup & Restore
         shell: powershell
         run: |
-          Write-Host "Dang chuan bi moi truong..."
           choco install tailscale -y --no-progress
           Start-Service tailscale
           if (!(Test-Path "C:\Backup")) { New-Item -ItemType Directory -Path "C:\Backup" }
@@ -25,33 +27,33 @@ jobs:
           path: C:\Backup
         continue-on-error: true
 
-      - name: 3. Start Tailscale (Fixed IP)
+      - name: 3. Start Tailscale (Giữ nguyên IP cũ)
         shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Hostname co dinh giup giu nguyen IP tren Tailscale
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset
+          # Thêm lệnh --force-reauth để nó đá máy cũ ra và chiếm lấy Hostname + IP đó
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset --force-reauth
           
           net user runneradmin "Phuc1993"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: 4. Chạy nối đầu (Tu nhan dien file)
+      - name: 4. Chạy nối đầu & Phục hồi App
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          if (Test-Path "C:\Backup\auto_start.ps1") {
+              powershell.exe -ExecutionPolicy Bypass -File "C:\Backup\auto_start.ps1"
+          }
+
           $wait = 15
-          Write-Host "Duy tri trong $wait phut..."
           for ($i=1; $i -le $wait; $i++) {
               Start-Sleep -Seconds 60
               Write-Host "Uptime: $i/$wait phut..."
-              
-              # Kich hoat phien moi o phut thu 13
               if ($i -eq 13) { 
-                  Write-Host "Dang tu dong kich hoat phien moi (Self-Chain)..."
-                  # Su dung bien moi truong de lay dung ten Workflow dang chay
+                  Write-Host "Dang tu dong kich hoat phien moi..."
                   gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
               }
           }
@@ -63,7 +65,3 @@ jobs:
           name: vps-data-15m
           path: C:\Backup
           retention-days: 1
-
-      - name: 6. Ket thuc ban giao
-        shell: powershell
-        run: Start-Sleep -Seconds 30
