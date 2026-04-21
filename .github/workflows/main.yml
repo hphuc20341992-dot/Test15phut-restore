@@ -1,19 +1,19 @@
-name: VPS-15Phut-Lien-Tuc
+name: VPS-15Phut-Tu-Nhan-Dien
 on:
   workflow_dispatch:
-  # Lưu ý: Cron của GitHub chỉ chạy tối thiểu mỗi 5-15 phút nhưng không chính xác tuyệt đối
   schedule:
-    - cron: '*/15 * * * *' 
+    - cron: '*/15 * * * *'
 
 jobs:
   vps-run:
     runs-on: windows-latest
-    timeout-minutes: 25 # Tăng thêm 10 phút để trừ hao thời gian setup/backup
+    timeout-minutes: 25
 
     steps:
       - name: 1. Setup & Restore
         shell: powershell
         run: |
+          Write-Host "Dang chuan bi moi truong..."
           choco install tailscale -y --no-progress
           Start-Service tailscale
           if (!(Test-Path "C:\Backup")) { New-Item -ItemType Directory -Path "C:\Backup" }
@@ -30,24 +30,29 @@ jobs:
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
+          # Hostname co dinh giup giu nguyen IP tren Tailscale
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset
+          
           net user runneradmin "Phuc1993"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: 4. Chạy nối đầu (Phút thứ 15)
+      - name: 4. Chạy nối đầu (Tu nhan dien file)
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           $wait = 15
+          Write-Host "Duy tri trong $wait phut..."
           for ($i=1; $i -le $wait; $i++) {
               Start-Sleep -Seconds 60
               Write-Host "Uptime: $i/$wait phut..."
-              # Kích hoạt máy mới ở phút thứ 13 để đảm bảo máy mới sẵn sàng khi máy cũ tắt
+              
+              # Kich hoat phien moi o phut thu 13
               if ($i -eq 13) { 
-                  Write-Host "Dang kich hoat phien moi..."
-                  gh workflow run "vps-15phut.yml" --repo "$env:GITHUB_REPOSITORY"
+                  Write-Host "Dang tu dong kich hoat phien moi (Self-Chain)..."
+                  # Su dung bien moi truong de lay dung ten Workflow dang chay
+                  gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
               }
           }
 
@@ -58,3 +63,7 @@ jobs:
           name: vps-data-15m
           path: C:\Backup
           retention-days: 1
+
+      - name: 6. Ket thuc ban giao
+        shell: powershell
+        run: Start-Sleep -Seconds 30
