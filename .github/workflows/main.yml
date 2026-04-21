@@ -11,44 +11,40 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - name: 1. Setup & Restore Folder
+      - name: 1. Setup & Restore
         shell: powershell
         run: |
-          # Cài đặt Tailscale nhưng chưa chạy service ngay
           choco install tailscale -y --no-progress
           if (!(Test-Path "C:\Backup")) { New-Item -ItemType Directory -Path "C:\Backup" }
-          # Tạo sẵn folder chứa cấu hình Tailscale để giữ IP
-          if (!(Test-Path "C:\Backup\TailscaleState")) { New-Item -ItemType Directory -Path "C:\Backup\TailscaleState" }
+          # Tạo folder lưu "linh hồn" của Tailscale để giữ IP
+          if (!(Test-Path "C:\Backup\TS_State")) { New-Item -ItemType Directory -Path "C:\Backup\TS_State" }
 
-      - name: 2. Download Last State (Bao gồm IP cũ)
+      - name: 2. Download Last State
         uses: actions/download-artifact@v4
         with:
           name: vps-data-15m
           path: C:\Backup
         continue-on-error: true
 
-      - name: 3. Restore IP & Start Tailscale
+      - name: 3. Restore Identity & Start Tailscale
         shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Sao chép dữ liệu cấu hình cũ vào hệ thống trước khi start
-          $TS_PATH = "$env:ProgramData\Tailscale"
-          if (Test-Path "C:\Backup\TailscaleState\*.log") {
-              Write-Host "Dang phuc hoi danh tinh IP cu..."
-              Copy-Item -Path "C:\Backup\TailscaleState\*" -Destination $TS_PATH -Recurse -Force
+          # Phục hồi file định danh cũ nếu có để giữ đúng IP
+          $TS_DATA = "$env:ProgramData\Tailscale"
+          if (Test-Path "C:\Backup\TS_State\*.log") {
+              Copy-Item -Path "C:\Backup\TS_State\*" -Destination $TS_DATA -Recurse -Force
           }
           
           Start-Service tailscale
-          
-          # Lệnh UP này sẽ nhận diện lại máy cũ nếu đã có file cấu hình
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset --unattended --accept-dns=false
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset --force-reauth --unattended --accept-dns=false
           
           net user runneradmin "Phuc1993"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: 4. Chạy nối đầu & Phục hồi App
+      - name: 4. Chạy & Đợi (12 Phút)
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -57,17 +53,29 @@ jobs:
               powershell.exe -ExecutionPolicy Bypass -File "C:\Backup\auto_start.ps1"
           }
 
-          $wait = 12
+          $wait = 12 # Chạy 12 phút, dành 3 phút cuối để dọn dẹp và backup
           for ($i=1; $i -le $wait; $i++) {
               Start-Sleep -Seconds 60
               Write-Host "Uptime: $i/$wait phut..."
               if ($i -eq 10) { 
-                  Write-Host "Dang tu dong kich hoat phien moi..."
                   gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
               }
           }
 
-      - name: 5. Save State & IP Identity
+      - name: 5. Dọn dẹp & Ép ghi dữ liệu (Sync)
+        shell: powershell
+        if: always()
+        run: |
+          Write-Host "Dang chuan bi sao luu..."
+          # Dừng Tailscale để copy file định danh IP an toàn
+          Stop-Service tailscale -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:ProgramData\Tailscale\*" -Destination "C:\Backup\TS_State" -Recurse -Force
+          
+          # Lệnh quan trọng: Ép Windows ghi mọi dữ liệu từ RAM xuống ổ cứng ngay lập tức
+          [System.IO.Directory]::GetFiles("C:\Backup") | ForEach-Object { [System.IO.File]::OpenWrite($_).Close() }
+          Write-Host "Da ep ghi du lieu xong."
+
+      - name: 6. Save State (Upload Artifact)
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,11 +83,3 @@ jobs:
           path: C:\Backup\
           retention-days: 1
           overwrite: true
-
-      - name: 5b. Backup Tailscale Identity (Chạy trước khi tắt máy)
-        shell: powershell
-        if: always()
-        run: |
-          # Copy "linh hồn" của máy (IP) vào thư mục Backup để máy sau dùng
-          Stop-Service tailscale
-          Copy-Item -Path "$env:ProgramData\Tailscale\*" -Destination "C:\Backup\TailscaleState" -Recurse -Force
