@@ -1,4 +1,4 @@
-name: VPS-15Phut-Tu-Nhan-Dien
+name: VPS-15Phut-Chuan-IP-Data
 on:
   workflow_dispatch:
 
@@ -11,75 +11,78 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - name: 1. Setup & Restore
-        shell: powershell
+      - name: 1. Khoi tao Folder
         run: |
-          choco install tailscale -y --no-progress
           if (!(Test-Path "C:\Backup")) { New-Item -ItemType Directory -Path "C:\Backup" }
-          # Tạo folder lưu "linh hồn" của Tailscale để giữ IP
+          # Folder nay rat quan trong de giu IP
           if (!(Test-Path "C:\Backup\TS_State")) { New-Item -ItemType Directory -Path "C:\Backup\TS_State" }
 
-      - name: 2. Download Last State
+      - name: 2. Download Data & Identity
         uses: actions/download-artifact@v4
         with:
           name: vps-data-15m
-          path: C:\Backup
+          path: C:\DataDownload # Tai vao folder tam
         continue-on-error: true
 
-      - name: 3. Restore Identity & Start Tailscale
-        shell: powershell
+      - name: 3. Phuc hoi File & Danh tinh IP
+        run: |
+          # Sua loi long folder cua GitHub Artifact
+          if (Test-Path "C:\DataDownload\Backup") {
+              Copy-Item -Path "C:\DataDownload\Backup\*" -Destination "C:\Backup\" -Recurse -Force
+          } elseif (Test-Path "C:\DataDownload") {
+              Copy-Item -Path "C:\DataDownload\*" -Destination "C:\Backup\" -Recurse -Force
+          }
+          
+          # Phuc hoi "linh hon" Tailscale truoc khi cai dat
+          $TS_CONFIG_PATH = "$env:ProgramData\Tailscale"
+          if (Test-Path "C:\Backup\TS_State\server.state") {
+              if (!(Test-Path $TS_CONFIG_PATH)) { New-Item -ItemType Directory -Path $TS_CONFIG_PATH }
+              Copy-Item -Path "C:\Backup\TS_State\*" -Destination $TS_CONFIG_PATH -Recurse -Force
+              Write-Host "Da phuc hoi danh tinh IP cu thành cong."
+          }
+
+      - name: 4. Cai dat & Start Tailscale (Giu IP)
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Phục hồi file định danh cũ nếu có để giữ đúng IP
-          $TS_DATA = "$env:ProgramData\Tailscale"
-          if (Test-Path "C:\Backup\TS_State\*.log") {
-              Copy-Item -Path "C:\Backup\TS_State\*" -Destination $TS_DATA -Recurse -Force
-          }
-          
+          choco install tailscale -y --no-progress
           Start-Service tailscale
+          # Dung --force-reauth de "da" may cu dang treo ra khoi IP do
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=vps-15m-fixed --accept-routes --reset --force-reauth --unattended --accept-dns=false
           
           net user runneradmin "Phuc1993"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: 4. Chạy & Đợi (12 Phút)
-        shell: powershell
+      - name: 5. Auto Start App & Duy tri 12 Phut
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           if (Test-Path "C:\Backup\auto_start.ps1") {
               powershell.exe -ExecutionPolicy Bypass -File "C:\Backup\auto_start.ps1"
           }
-
-          $wait = 12 # Chạy 12 phút, dành 3 phút cuối để dọn dẹp và backup
+          $wait = 12
           for ($i=1; $i -le $wait; $i++) {
               Start-Sleep -Seconds 60
-              Write-Host "Uptime: $i/$wait phut..."
-              if ($i -eq 10) { 
-                  gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY"
-              }
+              if ($i -eq 10) { gh workflow run "$env:GITHUB_WORKFLOW" --repo "$env:GITHUB_REPOSITORY" }
           }
 
-      - name: 5. Dọn dẹp & Ép ghi dữ liệu (Sync)
-        shell: powershell
+      - name: 6. Luu danh tinh IP & Backup Data
         if: always()
         run: |
-          Write-Host "Dang chuan bi sao luu..."
-          # Dừng Tailscale để copy file định danh IP an toàn
-          Stop-Service tailscale -ErrorAction SilentlyContinue
+          # Dung service de copy file state cua Tailscale khong bi loi "dang su dung"
+          Stop-Service tailscale -Force
+          Start-Sleep -Seconds 5
           Copy-Item -Path "$env:ProgramData\Tailscale\*" -Destination "C:\Backup\TS_State" -Recurse -Force
           
-          # Lệnh quan trọng: Ép Windows ghi mọi dữ liệu từ RAM xuống ổ cứng ngay lập tức
-          [System.IO.Directory]::GetFiles("C:\Backup") | ForEach-Object { [System.IO.File]::OpenWrite($_).Close() }
-          Write-Host "Da ep ghi du lieu xong."
+          # Upload artifact tu folder Backup
+          Write-Host "Dang sao luu toan bo du lieu..."
 
-      - name: 6. Save State (Upload Artifact)
+      - name: 7. Final Upload
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: vps-data-15m
-          path: C:\Backup\
+          path: C:\Backup # KHONG co dau gạch chéo ở đây
           retention-days: 1
           overwrite: true
